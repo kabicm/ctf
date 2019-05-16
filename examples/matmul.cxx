@@ -75,7 +75,18 @@ int matmul(int     m,
       printf("Starting %d benchmarking iterations of matrix multiplication with specified attributes...\n", niter);
     }
     for (int i=0; i<niter; i++){
-      C.fill_random(0.0,1.0);
+      if (sp_A < 1.)
+        A.fill_sp_random(0.0,1.0,sp_A);
+      else
+        A.fill_random(0.0,1.0);
+      if (sp_B < 1.)
+        B.fill_sp_random(0.0,1.0,sp_B);
+      else
+        B.fill_random(0.0,1.0);
+      if (sp_C < 1.)
+        C.fill_sp_random(0.0,1.0,sp_C);
+      else
+        C.fill_random(0.0,1.0);
 
       MPI_Barrier(MPI_COMM_WORLD);
       auto start = std::chrono::steady_clock::now();
