@@ -7,6 +7,9 @@
 
 #include <ctf.hpp>
 #include <float.h>
+#include <chrono>
+#include <vector>
+
 using namespace CTF;
 
 /**
@@ -38,8 +41,6 @@ int matmul(int     m,
            bool    test=true,
            bool    bench=false,
            int     niter=10){
-  assert(test || bench);
-
   int sA = sp_A < 1. ? SP : 0;
   int sB = sp_B < 1. ? SP : 0;
   int sC = sp_C < 1. ? SP : 0;
@@ -48,7 +49,6 @@ int matmul(int     m,
   Matrix<> A(m, k, sym_A|sA, dw);
   Matrix<> B(k, n, sym_B|sB, dw);
   Matrix<> C(m, n, sym_C|sC, dw, "C");
-
 
   /* fill with random data */
   srand48(dw.rank);
@@ -66,95 +66,49 @@ int matmul(int     m,
     C.fill_random(0.0,1.0);
 
   bool pass = true;
+  bench = true;
 
-  if (test){ 
-    /* initialize matrices with default attributes (nonsymmetric, dense) */
-    Matrix<> ref_A(m, k, dw);
-    Matrix<> ref_B(k, n, dw);
-    Matrix<> ref_C(m, n, dw, "ref_C");
+  std::vector<long long> times;
 
-    /* copy (sparse) initial data to a set of reference matrices */
-    ref_A["ij"] = A["ij"];
-    ref_B["ij"] = B["ij"];
-    ref_C["ij"] = C["ij"];
-
-    /* compute reference answer */
-    switch (sym_C){
-      case NS:
-        ref_C["ik"] += ref_A["ij"]*ref_B["jk"];
-        break;
-      case SY:
-      case SH:
-        ref_C["ik"] += ref_A["ij"]*ref_B["jk"];
-        ref_C["ik"] += ref_A["kj"]*ref_B["ji"];
-        if (sym_C == SH) ref_C["ii"] = 0.0;
-        break;
-      case AS:
-        ref_C["ik"] += ref_A["ij"]*ref_B["jk"];
-        ref_C["ik"] -= ref_A["kj"]*ref_B["ji"];
-        break;
-    }
-    /* compute answer for matrices with attributes as specified */
-    C["ik"] += .5*A["ij"]*B["jk"];
-    C["ik"] += .5*B["jk"]*A["ij"];
-
-           
-    /* compute difference in answer */
-    ref_C["ik"] -= C["ik"];
-
-    pass = ref_C.norm2() <= 1.E-6;
-
-    if (dw.rank == 0){
-      if (pass) 
-        printf("{ C[\"ik\"] += A[\"ij\"]*B[\"jk\"] with A (%d*%d sym %d sp %lf), B (%d*%d sym %d sp %lf), C (%d*%d sym %d sp %lf) } passed \n",m,k,sym_A,sp_A,k,n,sym_B,sp_B,m,n,sym_C,sp_C);
-      else
-        printf("{ C[\"ik\"] += A[\"ij\"]*B[\"jk\"] with A (%d*%d sym %d sp %lf), B (%d*%d sym %d sp %lf), C (%d*%d sym %d sp %lf) } failed \n",m,k,sym_A,sp_A,k,n,sym_B,sp_B,m,n,sym_C,sp_C);
-    }
-  }
   if (bench){
-    double min_time = DBL_MAX;
-    double max_time = 0.0;
-    double tot_time = 0.0;
-    double times[niter];
-
     if (dw.rank == 0){
       printf("Starting %d benchmarking iterations of matrix multiplication with specified attributes...\n", niter);
     }
-    min_time = DBL_MAX;
-    max_time = 0.0;
-    tot_time = 0.0;
-    Timer_epoch smatmul("specified matmul");
-    smatmul.begin();
     for (int i=0; i<niter; i++){
-      //A.print(); 
-      //B.print();
+      if (sp_A < 1.)
+        A.fill_sp_random(0.0,1.0,sp_A);
+      else
+        A.fill_random(0.0,1.0);
+      if (sp_B < 1.)
+        B.fill_sp_random(0.0,1.0,sp_B);
+      else
+        B.fill_random(0.0,1.0);
+      if (sp_C < 1.)
+        C.fill_sp_random(0.0,1.0,sp_C);
+      else
+        C.fill_random(0.0,1.0);
 
-      double start_time = MPI_Wtime();
+      MPI_Barrier(MPI_COMM_WORLD);
+      auto start = std::chrono::steady_clock::now();
       C["ik"] = A["ij"]*B["jk"];
-      //C.print();
-      double end_time = MPI_Wtime();
-      double iter_time = end_time-start_time;
-      times[i] = iter_time;
-      tot_time += iter_time;
-      if (iter_time < min_time) min_time = iter_time;
-      if (iter_time > max_time) max_time = iter_time;
+      MPI_Barrier(MPI_COMM_WORLD);
+      auto end = std::chrono::steady_clock::now();
+      auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+      times.push_back(duration);
     }
-    smatmul.end();
-    
+
     if (dw.rank == 0){
-      printf("iterations completed.\n");
-      printf("All iterations times: ");
+        std::cout << "CYCLOPS TIMES [ms] = ";
+
       for (int i=0; i<niter; i++){
-        printf("%lf ", times[i]);
+          std::cout << times[i] << " ";
       }
-      printf("\n");
-      std::sort(times,times+niter);
-      printf("A (%d*%d sym %d sp %lf), B (%d*%d sym %d sp %lf), C (%d*%d sym %d sp %lf) Min time = %lf, Avg time = %lf, Med time = %lf, Max time = %lf\n",m,k,sym_A,sp_A,k,n,sym_B,sp_B,m,n,sym_C,sp_C,min_time,tot_time/niter, times[niter/2], max_time);
+      std::cout << std::endl;
     }
   
   }
-    
-  return pass;
+
+  return true;
 } 
 
 
@@ -234,12 +188,6 @@ int main(int argc, char ** argv){
     bench = atoi(getCmdOption(input_str, input_str+in_num, "-bench"));
     if (bench != 0 && bench != 1) bench = 1;
   } else bench = 1;
-  
-  if (getCmdOption(input_str, input_str+in_num, "-test")){
-    test = atoi(getCmdOption(input_str, input_str+in_num, "-test"));
-    if (test != 0 && test != 1) test = 1;
-  } else test = 1;
-
 
   {
     World dw(argc, argv);
@@ -247,8 +195,7 @@ int main(int argc, char ** argv){
     if (rank == 0){
       printf("Multiplying A (%d*%d sym %d sp %lf) and B (%d*%d sym %d sp %lf) into C (%d*%d sym %d sp %lf) \n",m,k,sym_A,sp_A,k,n,sym_B,sp_B,m,n,sym_C,sp_C);
     }
-    pass = matmul(m, n, k, dw, sym_A, sym_B, sym_C, sp_A, sp_B, sp_C, test, bench, niter);
-    assert(pass);
+    pass = matmul(m, n, k, dw, sym_A, sym_B, sym_C, sp_A, sp_B, sp_C, false, true, niter);
   }
 
   MPI_Finalize();
